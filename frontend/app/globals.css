@@ -1,0 +1,4 @@
+*{box-sizing:border-box} body{font-family:system-ui, sans-serif; margin:0; padding:24px}
+button{padding:8px 12px; border-radius:10px; border:1px solid #ddd; cursor:pointer}
+.card{padding:16px; border:1px solid #eee; border-radius:16px; margin-bottom:12px}
+.row{display:flex; gap:8px; align-items:center}

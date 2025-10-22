@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+frontend/.next
+frontend/node_modules
+frontend/next-env.d.ts
+frontend/tsconfig.json
+backend/nplusone.db
+frontend/package-lock.json
+frontend/app/layout.tsx
