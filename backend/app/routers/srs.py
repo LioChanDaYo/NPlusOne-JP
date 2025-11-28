@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime
 from ..db import get_db
-from ..models import Card, Review
+from ..models import Card, Review, Sentence
 from ..schemas import DueCard, ReviewIn
 from ..srs import schedule
 
@@ -13,11 +13,35 @@ router = APIRouter(prefix="/srs", tags=["srs"])
 @router.get("/due", response_model=list[DueCard])
 def due(db: Session = Depends(get_db)):
     now = datetime.utcnow()
-    cards = db.query(Card).filter(Card.user_id==1, Card.due <= now).order_by(Card.due).limit(20).all()
+    
+    # On fait une jointure pour avoir les infos de la carte ET de la phrase
+    # On filtre les cartes dont la date 'due' est passée
+    results = db.query(Card, Sentence).join(Sentence, Card.sentence_id == Sentence.id)\
+                .filter(Card.user_id == 1, Card.due <= now)\
+                .order_by(Card.due)\
+                .limit(20)\
+                .all()
+    
     out = []
-    for c in cards:
-        q = "読みを選んでください" if c.kind=="recog" else "日本語で答えてください"
-        out.append(DueCard(id=c.id, lemma=c.lemma, kind=c.kind, question=q, sentence_id=c.sentence_id))
+    for card, sentence in results:
+        # Logique simple pour la question
+        if card.kind == "recog":
+            # Recognition : On montre la phrase, on cache le mot ? 
+            # Pour l'instant on montre tout, l'utilisateur doit deviner la lecture/sens du mot cible
+            q = "Comment se lit et que veut dire ce mot ?"
+        else:
+            # Retrieval : On devrait cacher le mot dans la phrase (Cloze deletion)
+            # Pour ce MVP, on simplifie
+            q = "Quel est ce mot en japonais ?"
+
+        out.append(DueCard(
+            id=card.id, 
+            lemma=card.lemma, 
+            kind=card.kind, 
+            question=q, 
+            sentence_id=card.sentence_id,
+            sentence_text=sentence.text # <--- On remplit le nouveau champ
+        ))
     return out
 
 

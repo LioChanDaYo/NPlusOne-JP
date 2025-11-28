@@ -37,6 +37,7 @@ class DueCard(BaseModel):
     kind: str
     question: str
     sentence_id: int
+    sentence_text: str
 
 
 class ReviewIn(BaseModel):
