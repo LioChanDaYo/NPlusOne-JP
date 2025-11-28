@@ -28,6 +28,10 @@ pip install -r requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 
+# 6) Peupler la base de phrases
+pour l'instant à l'aide du script import_tatoeba.py, à lancer depuis /backend à partir du moment où jpn_sentences.tsv.bz2, téléchargé depuis le site tatoeba, se trouve également dans /backend
+py .\scripts\import_tatoeba.py
+
 Pour le Frontend :
 cd ../frontend
 npm i

@@ -3,12 +3,10 @@ from sqlalchemy.orm import relationship
 from .db import Base
 from datetime import datetime
 
-
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     name = Column(String, default="you")
-
 
 class Lexeme(Base):
     __tablename__ = "lexicon"
@@ -19,19 +17,17 @@ class Lexeme(Base):
     stability = Column(Float, default=0.0)
     difficulty = Column(Float, default=0.0)
 
-
 class Sentence(Base):
     __tablename__ = "sentences"
     id = Column(Integer, primary_key=True)
     text = Column(Text)
     lang = Column(String, default="ja")
-    source = Column(String) # youtube|tatoeba|mock
+    source = Column(String)
     source_id = Column(String, index=True)
     start_ms = Column(Integer, nullable=True)
     end_ms = Column(Integer, nullable=True)
     license = Column(String, nullable=True)
     author = Column(String, nullable=True)
-
 
 class Card(Base):
     __tablename__ = "cards"
@@ -42,10 +38,17 @@ class Card(Base):
     sentence_id = Column(Integer, ForeignKey("sentences.id"))
     hint = Column(Text, nullable=True)
     furigana = Column(Text, nullable=True)
+    
+    # --- FSRS STATE ---
     due = Column(DateTime, default=datetime.utcnow)
     stability = Column(Float, default=0.0)
     difficulty = Column(Float, default=0.0)
-
+    elapsed_days = Column(Integer, default=0)
+    scheduled_days = Column(Integer, default=0)
+    reps = Column(Integer, default=0)
+    lapses = Column(Integer, default=0)
+    state = Column(Integer, default=0) # 0=New, 1=Learning, 2=Review, 3=Relearning
+    last_review = Column(DateTime, nullable=True)
 
 class Review(Base):
     __tablename__ = "reviews"
