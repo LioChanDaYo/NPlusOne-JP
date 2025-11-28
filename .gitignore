@@ -213,3 +213,8 @@ frontend/tsconfig.json
 backend/nplusone.db
 frontend/package-lock.json
 frontend/app/layout.tsx
+
+# Données brutes (Tatoeba imports)
+*.tsv
+*.tsv.bz2
+*.csv

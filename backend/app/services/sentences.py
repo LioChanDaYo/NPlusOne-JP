@@ -1,22 +1,33 @@
 from typing import List, Dict
 import os
 import html
+from sqlalchemy import func
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
+
+from ..db import SessionLocal
+from ..models import Sentence
 from ..nlp import is_n_plus_1
 
-# On garde le client YouTube global pour éviter de le recréer à chaque appel
-# Assure-toi que YOUTUBE_API_KEY est bien dans ton .env
-youtube = build('youtube', 'v3', developerKey=os.getenv('YOUTUBE_API_KEY'))
+# --- SECTION 1 : LOGIQUE YOUTUBE (Conservée) ---
+
+# On garde le client YouTube global
+# Si la clé n'est pas là, on évite de faire planter l'app au démarrage, 
+# l'erreur surviendra seulement si on appelle la fonction.
+YOUTUBE_KEY = os.getenv('YOUTUBE_API_KEY')
+youtube = build('youtube', 'v3', developerKey=YOUTUBE_KEY) if YOUTUBE_KEY else None
 
 def search_videos(query: str, max_results: int = 3):
     """Cherche des vidéos japonaises contenant le mot-clé."""
+    if not youtube:
+        print("⚠️ Pas de clé API YouTube configurée.")
+        return []
     try:
         request = youtube.search().list(
             q=query,
             part="id,snippet",
             type="video",
-            relevanceLanguage="ja", # Priorité au contenu japonais
+            relevanceLanguage="ja",
             maxResults=max_results
         )
         response = request.execute()
@@ -26,64 +37,114 @@ def search_videos(query: str, max_results: int = 3):
         return []
 
 def get_subtitles(video_id: str):
-    """Récupère les sous-titres (priorité manuel > auto)."""
+    """Récupère les sous-titres."""
     try:
-        # On demande du japonais ('ja')
         return YouTubeTranscriptApi.get_transcript(video_id, languages=['ja'])
     except Exception:
-        # Si pas de sous-titres ou erreur, on renvoie une liste vide
         return []
 
-def fetch_candidates(lemma: str, known: set) -> List[Dict]:
-    """
-    Cherche des phrases N+1 pour 'lemma' via l'API YouTube.
-    """
+def fetch_from_youtube(lemma: str, known: set, limit: int = 5) -> List[Dict]:
+    """Logique d'extraction depuis YouTube (lente mais riche en contexte audio)."""
     out = []
+    print(f"🔎 Fallback sur YouTube pour : {lemma}")
     
-    # 1. On cherche des vidéos liées au mot (on ajoute "日本語" pour aider le contexte)
     videos = search_videos(f"{lemma} 日本語")
-    
-    existing_sentences = set() # Pour éviter les doublons exacts
+    existing_sentences = set()
 
     for video in videos:
-        vid_id = video['id']['videoId']
-        vid_title = video['snippet']['title']
+        if len(out) >= limit: break
         
-        # 2. On récupère le transcript
+        vid_id = video['id']['videoId']
         transcript = get_subtitles(vid_id)
         
-        # 3. On filtre chaque ligne du transcript
         for line in transcript:
             text = line['text']
-            
-            # Nettoyage basique (entités HTML & sauts de ligne)
             text = html.unescape(text).replace("\n", " ")
             
-            # Optimisation : Si le mot n'est pas dedans, on passe direct
-            if lemma not in text:
-                continue
-                
-            # Vérification N+1 : Le mot cible doit être le SEUL inconnu
+            if lemma not in text: continue
+            if text in existing_sentences: continue
+            
+            # Filtre N+1 (peut être assoupli ici si besoin)
             if is_n_plus_1(text, target=lemma, known_lemmas=known):
-                
-                # Évite les doublons
-                if text in existing_sentences:
-                    continue
                 existing_sentences.add(text)
-                
-                # Ajout aux candidats
                 out.append({
-                    "id": 0, # Sera géré par la DB lors de l'insertion
+                    "id": 0, # Pas d'ID DB pour l'instant
                     "text": text,
                     "source": "youtube",
                     "source_id": vid_id,
                     "start_ms": int(line['start'] * 1000),
                     "end_ms": int((line['start'] + line['duration']) * 1000),
-                    # On pourrait passer le titre de la vidéo comme metadata si besoin
                 })
-                
-                # Si on a trouvé assez de phrases (ex: 5), on arrête pour gagner du temps
-                if len(out) >= 5:
-                    return out
-
+                if len(out) >= limit: break
     return out
+
+
+# --- SECTION 2 : LOGIQUE TATOEBA / DB (Prioritaire) ---
+
+def fetch_from_db(lemma: str, known: set, limit: int = 5) -> List[Dict]:
+    """Logique d'extraction depuis la DB locale (rapide)."""
+    db = SessionLocal()
+    out = []
+    try:
+        # 1. On récupère un large pool de phrases contenant le mot
+        raw_candidates = db.query(Sentence)\
+            .filter(Sentence.text.contains(lemma))\
+            .filter(func.length(Sentence.text) < 60)\
+            .limit(100)\
+            .all()
+
+        n_plus_one_matches = []
+        fallback_matches = []
+
+        for s in raw_candidates:
+            if lemma not in s.text: continue
+
+            # Priorité 1 : N+1 Strict
+            if is_n_plus_1(s.text, lemma, known):
+                n_plus_one_matches.append(s)
+            else:
+                # Priorité 2 : Phrases simples (courtes)
+                fallback_matches.append(s)
+
+        # On prend d'abord les N+1
+        results = n_plus_one_matches[:limit]
+        
+        # Si pas assez, on complète avec les plus courtes des autres (Fallback Simplicité)
+        if len(results) < limit:
+            missing = limit - len(results)
+            fallback_matches.sort(key=lambda x: len(x.text))
+            results.extend(fallback_matches[:missing])
+
+        # Conversion en format dict
+        for s in results:
+            out.append({
+                "id": s.id,
+                "text": s.text,
+                "source": s.source,
+                "source_id": s.source_id,
+                "start_ms": s.start_ms,
+                "end_ms": s.end_ms,
+            })
+            
+        return out
+    finally:
+        db.close()
+
+
+# --- SECTION 3 : ORCHESTRATEUR ---
+
+def fetch_candidates(lemma: str, known: set) -> List[Dict]:
+    """
+    Stratégie Hybride :
+    1. Regarde en DB (Tatoeba).
+    2. Si < 5 phrases, complète avec YouTube.
+    """
+    candidates = fetch_from_db(lemma, known, limit=5)
+    
+    # Si on n'a pas assez de phrases (ex: mot rare ou argot absent de Tatoeba)
+    if len(candidates) < 5:
+        missing = 5 - len(candidates)
+        youtube_candidates = fetch_from_youtube(lemma, known, limit=missing)
+        candidates.extend(youtube_candidates)
+        
+    return candidates
